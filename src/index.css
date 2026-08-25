@@ -1,0 +1,190 @@
+@import "tailwindcss";
+
+@layer utilities {
+  .font-cinzel {
+    font-family: 'Cinzel', serif;
+  }
+  .font-cormorant {
+    font-family: 'Cormorant Garamond', serif;
+  }
+  .font-display {
+    font-family: 'Cinzel', 'Cormorant Garamond', serif;
+  }
+}
+
+:root {
+  --font-display: 'Cinzel', 'Cormorant Garamond', serif;
+  --font-body: 'Plus Jakarta Sans', sans-serif;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #0c0a09;
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.15);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(107, 23, 36, 0.35);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(107, 23, 36, 0.7);
+}
+
+/* Theme styling */
+.theme-dark {
+  --app-bg: #0d0714;
+  --app-text: #fdfbf7;
+  --panel-bg: rgba(38, 22, 62, 0.75);
+  --panel-border: rgba(168, 85, 247, 0.3);
+  --glass-bg: rgba(45, 27, 78, 0.72);
+  --glass-border: rgba(192, 132, 252, 0.35);
+}
+
+.theme-light {
+  --app-bg: #F5EFE6;
+  --app-text: #1c1917;
+  --panel-bg: #FBF8F2;
+  --panel-border: #E8DEC8;
+  --glass-bg: #FAF6EE;
+  --glass-border: #DDD1B8;
+}
+
+/* Animations */
+@keyframes auraPulse {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.4;
+    box-shadow: 0 0 15px currentColor;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.95;
+    box-shadow: 0 0 45px currentColor, 0 0 90px currentColor;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+    box-shadow: 0 0 5px currentColor;
+  }
+}
+
+@keyframes goldShowerParticle {
+  0% {
+    transform: translateY(-20px) scale(0.6);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  80% {
+    opacity: 0.8;
+  }
+  100% {
+    transform: translateY(60px) scale(1.2);
+    opacity: 0;
+  }
+}
+
+@keyframes nightGlowRing {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.6);
+    opacity: 1;
+  }
+  70% {
+    box-shadow: 0 0 0 25px rgba(255, 255, 255, 0);
+    opacity: 0.8;
+  }
+  100% {
+    box-shadow: 0 0 0 35px rgba(255, 255, 255, 0);
+    opacity: 0;
+  }
+}
+
+@keyframes pulseGlowingPath {
+  0%, 100% {
+    stroke-opacity: 0.5;
+    filter: drop-shadow(0 0 6px rgba(168, 85, 247, 0.6));
+  }
+  50% {
+    stroke-opacity: 0.95;
+    filter: drop-shadow(0 0 16px rgba(245, 158, 11, 0.9)) drop-shadow(0 0 24px rgba(168, 85, 247, 0.8));
+  }
+}
+
+@keyframes floatGentle {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes floatGentleAlt {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+.animate-aura-burst {
+  animation: auraPulse 2s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+.animate-gold-shower {
+  animation: goldShowerParticle 1.8s ease-out forwards;
+}
+
+.animate-night-glow-ring {
+  animation: nightGlowRing 2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-glowing-path {
+  animation: pulseGlowingPath 3.5s ease-in-out infinite;
+}
+
+.animate-float-1 {
+  animation: floatGentle 5s ease-in-out infinite;
+}
+
+.animate-float-2 {
+  animation: floatGentleAlt 6.5s ease-in-out infinite 1s;
+}
+
+.animate-float-3 {
+  animation: floatGentle 5.5s ease-in-out infinite 2s;
+}
+
+.animate-float-4 {
+  animation: floatGentleAlt 7s ease-in-out infinite 0.5s;
+}
+
+@keyframes fadeInScale {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-pop-in {
+  animation: fadeInScale 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}

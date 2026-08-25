@@ -1,0 +1,6 @@
+{
+  "name": "QuestHub",
+  "description": "Turn your to-do list into a game with quests, XP, levels, and AI assistance.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
