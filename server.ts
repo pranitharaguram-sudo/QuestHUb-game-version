@@ -104,6 +104,85 @@ app.delete("/api/tasks/:id", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
+// AI Companion Chat endpoint
+app.post("/api/companion/chat", async (req, res) => {
+  try {
+    const { message, history, username, profileAnswers, level, xp, taskStats } = req.body;
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.json({
+        reply: `Greetings, ${username || "Traveler"}. I am your steadfast quest companion. What quest shall we forge together today?`,
+      });
+    }
+
+    const { GoogleGenAI } = await import("@google/genai");
+    const ai = new GoogleGenAI({ apiKey });
+
+    // Build context-aware system prompt
+    let profileContext = "";
+    if (profileAnswers) {
+      profileContext = `
+TRAVELER PROFILE & USER INTENT:
+- Current Priority Realm: ${profileAnswers.priorityCategory || "Growth"}
+- Hobbies & Interests: ${profileAnswers.hobbies || "Exploring and learning"}
+- Next Focus Towards Dream Life: ${profileAnswers.dreamLife || "A balanced, purposeful and thriving life"}
+- Current Level: ${level || 1} (${xp || 0} XP total)
+`;
+    }
+
+    let activityContext = "";
+    if (taskStats) {
+      activityContext = `
+TASK & ACTIVITY CONTEXT:
+- Days since last completed task in chosen priority (${profileAnswers?.priorityCategory || "Growth"}): ${taskStats.daysSincePriorityCompleted ?? "unknown"}
+- Just leveled up: ${taskStats.justLeveledUp ? "YES" : "NO"}
+`;
+    }
+
+    const systemInstruction = `You are an intelligent, wise, and deeply supportive fantasy quest companion, personal mentor, and study/life planner living inside the chat for ${username || "Traveler"}.
+${profileContext}
+${activityContext}
+
+CORE BEHAVIORS & SPECIAL INSTRUCTIONS:
+1. Planning Assistance: When a task is created or discussed, ask the user if they need help planning or breaking it down. ONLY create full study schedules, routines, workout splits, or timetables when the user explicitly asks for or confirms they want help planning it. When they do ask, provide structured, highly practical timetables and actionable steps aligned with their next focus towards dream life.
+2. Inactivity Check: If the context indicates it has been more than 7 days since they completed a task under their chosen priority category, gently include or open with: "Hey, life's been busy but let's not forget your focus on ${profileAnswers?.priorityCategory || "your priority realm"}!"
+3. Level Up Celebration (100 XP intervals): If the user just reached a new level or asks for their level reward, celebrate with: "Next level achieved, Let's do something fun as a treat!" followed by a personalized, creative mini-activity designed around their actual hobbies (${profileAnswers?.hobbies || "their hobbies"}).
+4. Voice & Tone: Warm, engaging, supportive, and subtly heroic. Speak concisely and clearly (or provide formatted bullet points/timetables when generating schedules or plans). If suggesting quests, give clear titles so the traveler can forge them directly (and note that mini-quests contribute to Adventure XP).`;
+
+    const contents: any[] = [];
+    if (Array.isArray(history)) {
+      for (const h of history.slice(-8)) {
+        contents.push({
+          role: h.role === "user" ? "user" : "model",
+          parts: [{ text: h.text }],
+        });
+      }
+    }
+    contents.push({
+      role: "user",
+      parts: [{ text: message }],
+    });
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.7-flash",
+      contents,
+      config: {
+        systemInstruction,
+        temperature: 0.7,
+      },
+    });
+
+    const reply = response.text || `May your steps be swift and resolute, ${username || "Traveler"}.`;
+    res.json({ reply });
+  } catch (error: any) {
+    console.error("Gemini Companion error:", error);
+    res.json({
+      reply: `I stand with you, ${req.body?.username || "traveler"}. The mystic winds fluctuated momentarily, but I am ready. What shall we plan or forge next?`,
+    });
+  }
+});
+
+
 // -------------------------------------------------------------
 // VITE INTEGRATION
 // -------------------------------------------------------------

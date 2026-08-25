@@ -16,6 +16,7 @@ export const users = pgTable("users", {
     wellbeing: 0,
     adventure: 0,
   }).notNull(),
+  profileAnswers: jsonb("profile_answers"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

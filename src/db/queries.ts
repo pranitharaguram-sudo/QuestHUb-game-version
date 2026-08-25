@@ -89,6 +89,7 @@ export async function updateUserStats(
     streakBest?: number;
     worldXp?: any;
     avatarName?: string;
+    profileAnswers?: any;
   }
 ) {
   try {
@@ -99,6 +100,7 @@ export async function updateUserStats(
     if (stats.streakBest !== undefined) updatePayload.streakBest = stats.streakBest;
     if (stats.worldXp !== undefined) updatePayload.worldXp = stats.worldXp;
     if (stats.avatarName !== undefined) updatePayload.avatarName = stats.avatarName;
+    if (stats.profileAnswers !== undefined) updatePayload.profileAnswers = stats.profileAnswers;
 
     const res = await db
       .update(users)

@@ -1,8 +1,12 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { IMAGES } from "./assets";
-import { WorldKey, PriorityLevel, DifficultyLevel, QuestTask, ThemeMode, UserAccount } from "./types";
+import { WorldKey, PriorityLevel, DifficultyLevel, QuestTask, ThemeMode, UserAccount, UserProfileAnswers } from "./types";
 import { LoginPage } from "./components/LoginPage";
+import { CompanionChatDrawer } from "./components/CompanionChatDrawer";
+import { OnboardingQuestionsModal } from "./components/OnboardingQuestionsModal";
+import { ProfileModal } from "./components/ProfileModal";
 import { auth } from "./lib/firebase";
+import { authenticatedFetch, getFreshAuthToken } from "./lib/api";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import {
   Menu,
@@ -269,6 +273,7 @@ export default function App() {
               streakCurrent: u.streakCurrent ?? 0,
               streakBest: u.streakBest ?? 0,
               worldXp: u.worldXp || { growth: 0, social: 0, wellbeing: 0, adventure: 0 },
+              profileAnswers: u.profileAnswers || u.profile_answers || undefined,
               tasks: (data.tasks || []).map((t: any) => ({
                 id: t.id,
                 title: t.title,
@@ -320,40 +325,117 @@ export default function App() {
     } catch (e) {}
 
     // Cloud SQL backend synchronization if authenticated
-    if (authToken) {
-      try {
-        await fetch("/api/profile/stats", {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${authToken}`,
-          },
-          body: JSON.stringify({
-            level: acc.level,
-            xp: acc.xp,
-            streakCurrent: acc.streakCurrent,
-            streakBest: acc.streakBest,
-            worldXp: acc.worldXp,
-            avatarName: acc.avatarName,
-          }),
-        });
-      } catch (e) {
-        console.error("Cloud SQL sync stats failed:", e);
-      }
+    try {
+      await authenticatedFetch("/api/profile/stats", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          level: acc.level,
+          xp: acc.xp,
+          streakCurrent: acc.streakCurrent,
+          streakBest: acc.streakBest,
+          worldXp: acc.worldXp,
+          avatarName: acc.avatarName,
+          profileAnswers: acc.profileAnswers,
+        }),
+      });
+    } catch (e) {
+      console.error("Cloud SQL sync stats failed:", e);
     }
   };
 
   // Glow aura triggers upon quest completion (2 seconds)
   const [glowingWorld, setGlowingWorld] = useState<WorldKey | null>(null);
   const [xpBanner, setXpBanner] = useState<{ amount: number; world: WorldKey } | null>(null);
+  const [levelUpBanner, setLevelUpBanner] = useState<{ newLevel: number; treatIdea?: string } | null>(null);
 
   // World Details modal
   const [inspectingWorld, setInspectingWorld] = useState<WorldKey | null>(null);
+
+  // Profile Modal & Onboarding Questions Modal
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [isOnboardingEditing, setIsOnboardingEditing] = useState(false);
+
+  // Task creation planning offer banner & companion chat task
+  const [planningOfferQuest, setPlanningOfferQuest] = useState<QuestTask | null>(null);
+  const [activeChatHelpTask, setActiveChatHelpTask] = useState<QuestTask | null>(null);
 
   // Calendar Modal & Selected Task to Edit
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [calendarSelectedDate, setCalendarSelectedDate] = useState<string | null>(null);
   const [editingTask, setEditingTask] = useState<QuestTask | null>(null);
+  const [isCompanionChatOpen, setIsCompanionChatOpen] = useState(false);
+  const [weekOffset, setWeekOffset] = useState(0);
+
+  // Check if active user needs to fill out the 3 onboarding questions (shows for any account with missing answers)
+  const showOnboardingModal = useMemo(() => {
+    if (!currentAccount) return false;
+    if (isOnboardingEditing) return true;
+    return !currentAccount.profileAnswers || !currentAccount.profileAnswers.priorityCategory;
+  }, [currentAccount, isOnboardingEditing]);
+
+  const handleSaveProfileAnswers = async (answers: UserProfileAnswers) => {
+    if (!currentAccount) return;
+    
+    // Create mini-quests tailored to user's hobbies and next focus towards dream life
+    // All mini-quests contribute to Adventure XP
+    let nextTasks = [...currentAccount.tasks];
+    const newMiniQuests: QuestTask[] = [];
+
+    if (answers.hobbies) {
+      const hobbiesSnippet = answers.hobbies.length > 35 ? answers.hobbies.slice(0, 32) + "..." : answers.hobbies;
+      const hobbyMiniQuest: QuestTask = {
+        id: "hobby_quest_" + Math.random().toString(36).substring(2, 9),
+        title: `Hobby Quest: 30 min of ${hobbiesSnippet}`,
+        category: "adventure", // All mini-quests contribute to adventure XP
+        priority: "medium",
+        difficulty: "easy",
+        due: todayKey(now),
+        completed: false,
+        notes: `Mini-quest created from your hobbies: ${answers.hobbies}`,
+      };
+      newMiniQuests.push(hobbyMiniQuest);
+    }
+
+    if (answers.dreamLife) {
+      const dreamLifeSnippet = answers.dreamLife.length > 35 ? answers.dreamLife.slice(0, 32) + "..." : answers.dreamLife;
+      const dreamMiniQuest: QuestTask = {
+        id: "dream_quest_" + Math.random().toString(36).substring(2, 9),
+        title: `Dream Life Step: Action on ${dreamLifeSnippet}`,
+        category: "adventure", // All mini-quests contribute to adventure XP
+        priority: "high",
+        difficulty: "easy",
+        due: todayKey(now),
+        completed: false,
+        notes: `Mini-quest created from your dream life focus: ${answers.dreamLife}`,
+      };
+      newMiniQuests.push(dreamMiniQuest);
+    }
+
+    // Prepend generated mini-quests
+    nextTasks = [...newMiniQuests, ...nextTasks];
+
+    const updatedAccount: UserAccount = {
+      ...currentAccount,
+      profileAnswers: answers,
+      tasks: nextTasks,
+      updatedAt: new Date().toISOString(),
+    };
+    await saveAccountState(updatedAccount);
+    setIsOnboardingEditing(false);
+    playTone(880, 150);
+
+    // If new mini-quests were created, trigger the AI planning offer notification for the primary focus quest
+    if (newMiniQuests.length > 0) {
+      const focusQuest = newMiniQuests.find((q) => q.title.startsWith("Dream Life")) || newMiniQuests[0];
+      setPlanningOfferQuest(focusQuest);
+      setTimeout(() => {
+        setPlanningOfferQuest((prev) => (prev?.id === focusQuest.id ? null : prev));
+      }, 9000);
+    }
+  };
 
   const toggleTheme = () => {
     setTheme((prev) => (prev === "dark" ? "light" : "dark"));
@@ -382,13 +464,23 @@ export default function App() {
       setTimeout(() => setGlowingWorld(null), 2000);
       setTimeout(() => setXpBanner(null), 1900);
 
-      // Increment world XP and avatar level in real time
+      // Increment world XP and avatar level in real time (100 XP per level)
       const nextWorldXp = {
         ...currentAccount.worldXp,
         [task.category]: (currentAccount.worldXp[task.category] || 0) + xpReward,
       };
       const nextTotalXp = currentAccount.xp + xpReward;
-      const nextLevel = Math.floor(nextTotalXp / 150) + 1;
+      const nextLevel = Math.floor(nextTotalXp / 100) + 1;
+
+      // Detect Level Up (every 100 XP hit) and trigger celebration notification banner
+      if (nextLevel > currentAccount.level) {
+        const hobbiesDesc = currentAccount.profileAnswers?.hobbies || "your favorite creative hobby";
+        setLevelUpBanner({
+          newLevel: nextLevel,
+          treatIdea: hobbiesDesc,
+        });
+        setTimeout(() => setLevelUpBanner(null), 6000);
+      }
 
       const nextTasks = tasks.map((t) =>
         t.id === id
@@ -445,6 +537,12 @@ export default function App() {
       tasks: [newTask, ...currentAccount.tasks],
     });
     playTone(640, 100);
+
+    // Proactively show notification: "Do you want me to help you plan this?"
+    setPlanningOfferQuest(newTask);
+    setTimeout(() => {
+      setPlanningOfferQuest((prev) => (prev?.id === newTask.id ? null : prev));
+    }, 9000);
 
     // Backend Cloud SQL sync
     if (authToken) {
@@ -595,6 +693,7 @@ export default function App() {
             streakCurrent: u.streakCurrent ?? 0,
             streakBest: u.streakBest ?? 0,
             worldXp: u.worldXp || { growth: 0, social: 0, wellbeing: 0, adventure: 0 },
+            profileAnswers: u.profileAnswers || u.profile_answers || undefined,
             tasks: (profileData.tasks || []).map((t: any) => ({
               id: t.id,
               title: t.title,
@@ -643,6 +742,46 @@ export default function App() {
         </div>
       )}
 
+      {/* Celebratory Level-Up Banner on Screen */}
+      {levelUpBanner && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 animate-pop-in text-center max-w-md w-[92%] px-2">
+          <div
+            className={`p-4 sm:p-5 rounded-3xl font-cinzel shadow-2xl border backdrop-blur-2xl flex flex-col items-center gap-2 ${
+              isDark
+                ? "bg-[#281340]/95 border-amber-400/80 text-[#FDFBF7] shadow-amber-500/20"
+                : "bg-[#FFFDF9] border-[#D4AF37] text-stone-950 shadow-2xl"
+            }`}
+          >
+            <div className="flex items-center justify-center gap-2">
+              <span className="text-2xl animate-bounce">🎉</span>
+              <span className="text-sm sm:text-base font-extrabold tracking-widest text-amber-500">
+                LEVEL UP ACHIEVED!
+              </span>
+              <span className="text-2xl animate-bounce">🏆</span>
+            </div>
+
+            <div className="font-cormorant font-bold text-base sm:text-lg">
+              You reached <span className="font-cinzel text-amber-500 font-extrabold">Level {levelUpBanner.newLevel}</span>!
+            </div>
+
+            <p className="text-xs sm:text-sm font-semibold opacity-90 max-w-sm">
+              ✨ <span className="font-bold">Treat Time:</span> Take 20 minutes today to unwind with <span className="underline decoration-amber-500 font-bold">{levelUpBanner.treatIdea}</span>. You've earned this victory!
+            </p>
+
+            <button
+              onClick={() => setLevelUpBanner(null)}
+              className={`mt-1 px-4 py-1 rounded-full text-[11px] font-bold tracking-wider uppercase border transition ${
+                isDark
+                  ? "bg-amber-400/20 border-amber-400 text-amber-200 hover:bg-amber-400 hover:text-stone-950"
+                  : "bg-[#6B1724] border-[#6B1724] text-[#FDFBF7] hover:bg-[#58131E]"
+              }`}
+            >
+              Claim Celebration
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* =====================================================================
           TOP NAVIGATION BAR (Across Dashboard, Worlds, and All Tasks)
           - Left: Dropdown Menu (Dashboard, Worlds, All Tasks, Sign Out)
@@ -670,7 +809,7 @@ export default function App() {
             <Menu size={18} />
           </button>
 
-          {/* 4-Option Dropdown Menu (Includes Sign Out) */}
+          {/* 4-Option Dropdown Menu (Includes Profile & Sign Out) */}
           {isMenuOpen && (
             <DropdownNavMenu
               isDark={isDark}
@@ -678,6 +817,10 @@ export default function App() {
               currentUser={currentAccount?.username || "Guest"}
               onSelectPage={(page) => {
                 setCurrentPage(page);
+                setIsMenuOpen(false);
+              }}
+              onOpenProfile={() => {
+                setIsProfileOpen(true);
                 setIsMenuOpen(false);
               }}
               onSignOut={handleSignOut}
@@ -786,7 +929,7 @@ export default function App() {
           {/* CENTER SPATIOUS AREA: Kept wide open for background artwork */}
           <div className="relative z-10 text-center py-12 pointer-events-none" />
 
-          {/* BOTTOM SECTION: Weekly Strip Calendar (Solid Cream in Light, Glass Purple in Dark) */}
+          {/* BOTTOM SECTION: Weekly Strip Calendar (Inspired by reference layout) */}
           <div className="relative z-10 max-w-2xl mx-auto w-full pb-2">
             <div
               className={`p-4 rounded-3xl border shadow-xl transition ${
@@ -795,34 +938,108 @@ export default function App() {
                   : "bg-[#FBF8F2] border-[#DDD1B8] text-stone-900"
               }`}
             >
-              <div className="flex items-center justify-between mb-3 px-1">
-                <span className="font-cinzel text-xs font-bold uppercase tracking-widest text-inherit">
-                  Weekly Schedule
-                </span>
-                <button
-                  onClick={() => setIsCalendarOpen(true)}
-                  className={`text-xs font-bold flex items-center gap-1.5 transition ${
-                    isDark ? "text-amber-300 hover:text-amber-200" : "text-[#6B1724] hover:underline"
-                  }`}
-                >
-                  <CalendarIcon size={14} />
-                  <span>Expand to Full Month</span>
-                </button>
-              </div>
-
-              {/* Sunday-to-Saturday Weekly Strip with Solid Dark / Pastel Rings */}
               <CleanWeeklyStrip
                 tasks={tasks}
                 currentNow={now}
                 isDark={isDark}
+                weekOffset={weekOffset}
+                onPrevWeek={() => setWeekOffset((prev) => prev - 1)}
+                onNextWeek={() => setWeekOffset((prev) => prev + 1)}
                 onSelectDate={(dateStr) => {
                   setCalendarSelectedDate(dateStr);
                   setIsCalendarOpen(true);
                 }}
+                onOpenFullCalendar={() => setIsCalendarOpen(true)}
               />
             </div>
           </div>
         </main>
+      )}
+
+      {/* Proactive AI Planning Notification Banner on Task Creation */}
+      {planningOfferQuest && (
+        <div className="fixed top-20 right-4 sm:right-6 z-50 animate-pop-in max-w-sm w-[92vw]">
+          <div
+            className={`p-3.5 sm:p-4 rounded-3xl shadow-2xl border backdrop-blur-2xl transition flex items-start gap-3 ${
+              isDark
+                ? "bg-[#281340]/95 border-amber-400/70 text-[#FDFBF7] shadow-purple-950/80"
+                : "bg-[#FFFDF9] border-[#6B1724]/40 text-stone-900 shadow-2xl"
+            }`}
+          >
+            <div className="relative w-10 h-10 rounded-full overflow-hidden border-2 border-amber-400 shrink-0 shadow mt-0.5">
+              <img
+                src={IMAGES.companionAvatar}
+                alt="Companion"
+                className="w-full h-full object-cover"
+                referrerPolicy="no-referrer"
+              />
+              <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 rounded-full ring-1 ring-stone-900" />
+            </div>
+
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-cinzel font-bold tracking-wider text-amber-500 flex items-center gap-1">
+                  <Sparkles size={11} />
+                  <span>AI Companion</span>
+                </span>
+                <button
+                  onClick={() => setPlanningOfferQuest(null)}
+                  className={`text-xs opacity-60 hover:opacity-100 p-0.5 rounded-md`}
+                >
+                  ✕
+                </button>
+              </div>
+
+              <h4 className="font-cinzel text-xs sm:text-sm font-bold tracking-wide mt-0.5">
+                Do you want me to help you plan this?
+              </h4>
+              <p className="text-[11px] font-cormorant font-semibold opacity-85 truncate mt-0.5">
+                Quest: "{planningOfferQuest.title}"
+              </p>
+
+              <div className="mt-2.5 flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setActiveChatHelpTask(planningOfferQuest);
+                    setIsCompanionChatOpen(true);
+                    setPlanningOfferQuest(null);
+                  }}
+                  className={`px-3 py-1 rounded-full text-[11px] font-cinzel font-bold tracking-wide transition shadow cursor-pointer ${
+                    isDark
+                      ? "bg-gradient-to-r from-amber-400 to-amber-500 text-stone-950 hover:from-amber-300 hover:to-amber-400"
+                      : "bg-[#6B1724] hover:bg-[#58131E] text-[#FDFBF7]"
+                  }`}
+                >
+                  Yes, Plan with AI
+                </button>
+                <button
+                  onClick={() => setPlanningOfferQuest(null)}
+                  className={`px-2.5 py-1 rounded-full text-[11px] font-cinzel font-bold border transition ${
+                    isDark
+                      ? "border-purple-400/30 text-purple-200 hover:bg-purple-900/40"
+                      : "border-stone-300 text-stone-600 hover:bg-stone-100"
+                  }`}
+                >
+                  No, I'm good
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating AI Companion Chatbot on the Right */}
+      {currentAccount && (
+        <CompanionChatDrawer
+          isOpen={isCompanionChatOpen}
+          onToggle={() => setIsCompanionChatOpen((prev) => !prev)}
+          isDark={isDark}
+          account={currentAccount}
+          onAddQuest={handleAddTask}
+          onOpenProfile={() => setIsProfileOpen(true)}
+          activeHelpTask={activeChatHelpTask}
+          onClearHelpTask={() => setActiveChatHelpTask(null)}
+        />
       )}
 
       {/* =====================================================================
@@ -1238,26 +1455,60 @@ export default function App() {
           }}
         />
       )}
+
+      {/* =====================================================================
+          NEW USER ONBOARDING QUESTIONS FORM (3 Questions)
+          ===================================================================== */}
+      {showOnboardingModal && currentAccount && (
+        <OnboardingQuestionsModal
+          isDark={isDark}
+          username={currentAccount.avatarName || currentAccount.username}
+          initialAnswers={currentAccount.profileAnswers}
+          onSave={handleSaveProfileAnswers}
+          isEditing={isOnboardingEditing}
+          onClose={() => setIsOnboardingEditing(false)}
+        />
+      )}
+
+      {/* =====================================================================
+          USER PROFILE MODAL (Displays Name and 3 Answers)
+          ===================================================================== */}
+      {isProfileOpen && currentAccount && (
+        <ProfileModal
+          isOpen={isProfileOpen}
+          onClose={() => setIsProfileOpen(false)}
+          isDark={isDark}
+          account={currentAccount}
+          onOpenEditProfile={() => {
+            setIsProfileOpen(false);
+            setIsOnboardingEditing(true);
+          }}
+        />
+      )}
     </div>
   );
 }
 
 // =====================================================================
-// COMPONENT: 4-OPTION DROPDOWN NAVIGATION MENU (Includes Sign Out)
+// COMPONENT: 4-OPTION DROPDOWN NAVIGATION MENU (Includes Sign Out & Profile)
 // =====================================================================
+interface DropdownNavMenuProps {
+  isDark: boolean;
+  currentPage: PageView;
+  currentUser: string;
+  onSelectPage: (page: PageView) => void;
+  onOpenProfile: () => void;
+  onSignOut: () => void;
+}
+
 function DropdownNavMenu({
   isDark,
   currentPage,
   currentUser,
   onSelectPage,
+  onOpenProfile,
   onSignOut,
-}: {
-  isDark: boolean;
-  currentPage: PageView;
-  currentUser: string;
-  onSelectPage: (page: PageView) => void;
-  onSignOut: () => void;
-}) {
+}: DropdownNavMenuProps) {
   return (
     <div
       className={`absolute top-12 left-0 w-60 rounded-2xl border shadow-2xl backdrop-blur-2xl p-2 z-50 animate-pop-in ${
@@ -1310,6 +1561,19 @@ function DropdownNavMenu({
       >
         <Layers size={15} className={isDark ? "text-amber-400" : "text-inherit"} />
         <span className="font-cinzel">All Active Tasks</span>
+      </button>
+
+      {/* Profile Option to view answers to the 3 questions */}
+      <button
+        onClick={onOpenProfile}
+        className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-2.5 transition ${
+          isDark
+            ? "hover:bg-purple-900/50 text-amber-300"
+            : "hover:bg-[#EAE2D2] text-[#6B1724]"
+        }`}
+      >
+        <User size={15} />
+        <span className="font-cinzel font-bold">Profile</span>
       </button>
 
       <div className={`my-1 border-t ${isDark ? "border-purple-500/20" : "border-[#E5DBC7]"}`} />
@@ -1526,34 +1790,47 @@ function FloatingTaskInputBar({
 }
 
 // =====================================================================
-// COMPONENT: CLEAN WEEKLY STRIP (Solid Rings in Dark Aesthetic / Pastel)
+// COMPONENT: CLEAN WEEKLY STRIP (Faithful to reference layout)
 // =====================================================================
 function CleanWeeklyStrip({
   tasks,
   currentNow,
   isDark,
+  weekOffset = 0,
+  onPrevWeek,
+  onNextWeek,
   onSelectDate,
+  onOpenFullCalendar,
 }: {
   tasks: QuestTask[];
   currentNow: Date;
   isDark: boolean;
+  weekOffset?: number;
+  onPrevWeek?: () => void;
+  onNextWeek?: () => void;
   onSelectDate: (dateStr: string) => void;
+  onOpenFullCalendar?: () => void;
 }) {
   const weekDays = useMemo(() => {
-    const today = currentNow;
-    const dayOfWeek = today.getDay(); // 0 is Sunday
-    const sunday = new Date(today);
-    sunday.setDate(today.getDate() - dayOfWeek);
+    const today = new Date(currentNow);
+    today.setDate(today.getDate() + weekOffset * 7);
+
+    // Find Monday of the current week (ISO week: Monday is day 1, Sunday is 0)
+    const day = today.getDay();
+    const diffToMonday = day === 0 ? -6 : 1 - day;
+    const monday = new Date(today);
+    monday.setDate(today.getDate() + diffToMonday);
 
     const days = [];
-    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const dayNames = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
 
     for (let i = 0; i < 7; i++) {
-      const d = new Date(sunday);
-      d.setDate(sunday.getDate() + i);
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
       const fullDateStr = todayKey(d);
       const ringColor = getPriorityRingForDate(tasks, fullDateStr, isDark);
       const isToday = fullDateStr === todayKey(currentNow);
+      const hasQuests = tasks.some((t) => t.due === fullDateStr);
 
       days.push({
         dayName: dayNames[i],
@@ -1561,41 +1838,123 @@ function CleanWeeklyStrip({
         fullDate: fullDateStr,
         isToday,
         ringColor,
+        hasQuests,
       });
     }
     return days;
-  }, [tasks, currentNow, isDark]);
+  }, [tasks, currentNow, isDark, weekOffset]);
+
+  const weekRangeLabel = useMemo(() => {
+    if (weekOffset === 0) return "This Week";
+    if (weekDays.length === 7) {
+      const first = weekDays[0].fullDate;
+      const last = weekDays[6].fullDate;
+      return `${first.slice(5)} to ${last.slice(5)}`;
+    }
+    return "This Week";
+  }, [weekOffset, weekDays]);
 
   return (
-    <div className="grid grid-cols-7 gap-2">
-      {weekDays.map((d) => (
-        <button
-          key={d.fullDate}
-          onClick={() => onSelectDate(d.fullDate)}
-          className={`flex flex-col items-center justify-center py-2 px-1 rounded-2xl transition border relative ${
-            d.isToday
-              ? isDark
-                ? "bg-purple-900/50 border-amber-400 text-amber-200 shadow-md"
-                : "bg-[#FAF6EE] border-[#6B1724] text-stone-950 font-bold shadow-sm"
-              : isDark
-              ? "bg-[#180b2a]/50 border-purple-500/20 text-stone-300 hover:border-purple-400"
-              : "bg-[#FAF6EE]/80 border-[#E8DEC8] text-stone-700 hover:border-[#6B1724]/40"
-          }`}
-        >
-          <span className="text-[10px] font-bold opacity-60 uppercase font-cinzel">{d.dayName}</span>
+    <div className="space-y-3">
+      {/* Top Strip Header: < This Week > with Expand to Full Month */}
+      <div className="flex items-center justify-between px-1">
+        <div className="flex items-center gap-2">
+          {onPrevWeek && (
+            <button
+              onClick={onPrevWeek}
+              className={`p-1 rounded-lg transition ${
+                isDark ? "hover:bg-purple-900/60 text-purple-200" : "hover:bg-[#EAE2D2] text-stone-700"
+              }`}
+              title="Previous Week"
+            >
+              <ChevronLeft size={16} />
+            </button>
+          )}
 
-          {/* Date Number with Solid Priority Ring */}
-          <div
-            className="w-8 h-8 mt-1 rounded-full flex items-center justify-center text-xs font-bold transition"
-            style={{
-              border: d.ringColor ? `2.5px solid ${d.ringColor}` : "1.5px solid transparent",
-              boxShadow: d.ringColor ? `0 0 6px ${d.ringColor}40` : undefined,
-            }}
+          <span className="font-cinzel text-xs font-bold uppercase tracking-wider">
+            {weekRangeLabel}
+          </span>
+
+          {onNextWeek && (
+            <button
+              onClick={onNextWeek}
+              className={`p-1 rounded-lg transition ${
+                isDark ? "hover:bg-purple-900/60 text-purple-200" : "hover:bg-[#EAE2D2] text-stone-700"
+              }`}
+              title="Next Week"
+            >
+              <ChevronRight size={16} />
+            </button>
+          )}
+        </div>
+
+        {onOpenFullCalendar && (
+          <button
+            onClick={onOpenFullCalendar}
+            className={`text-xs font-bold flex items-center gap-1.5 transition ${
+              isDark ? "text-amber-300 hover:text-amber-200" : "text-[#6B1724] hover:underline"
+            }`}
+            title="Expand Full Calendar"
           >
-            {d.dayNum}
-          </div>
-        </button>
-      ))}
+            <CalendarIcon size={14} />
+            <span className="hidden sm:inline">Full Month</span>
+          </button>
+        )}
+      </div>
+
+      {/* 7 Columns: MON - SUN matching reference design */}
+      <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
+        {weekDays.map((d) => (
+          <button
+            key={d.fullDate}
+            onClick={() => onSelectDate(d.fullDate)}
+            className={`flex flex-col items-center justify-center py-2 px-0.5 rounded-2xl transition relative group ${
+              d.isToday
+                ? isDark
+                  ? "bg-purple-900/40 text-amber-200"
+                  : "text-stone-900"
+                : isDark
+                ? "hover:bg-[#180b2a]/60 text-stone-300"
+                : "hover:bg-[#FAF6EE] text-stone-700"
+            }`}
+          >
+            {/* Day of Week Label (e.g. MON) */}
+            <span className="text-[10px] sm:text-[11px] font-bold opacity-75 font-cinzel tracking-wider">
+              {d.dayName}
+            </span>
+
+            {/* Date Number */}
+            <div className="relative mt-1 flex flex-col items-center">
+              <div
+                className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition shadow-sm ${
+                  d.isToday
+                    ? isDark
+                      ? "bg-amber-400 text-stone-950 font-extrabold shadow-amber-500/30"
+                      : "bg-[#6B1724] text-[#FDFBF7] font-extrabold"
+                    : isDark
+                    ? "bg-[#180b2a]/50 text-purple-100"
+                    : "bg-transparent text-stone-800 hover:bg-[#EAE2D2]/60"
+                }`}
+              >
+                {d.dayNum}
+              </div>
+
+              {/* Dot indicator underneath active day or day with quests */}
+              {d.isToday ? (
+                <span className={`block w-1.5 h-1.5 rounded-full mt-1 ${
+                  isDark ? "bg-amber-400" : "bg-[#6B1724]"
+                }`} />
+              ) : d.hasQuests ? (
+                <span className={`block w-1 h-1 rounded-full mt-1.5 opacity-60 ${
+                  isDark ? "bg-purple-400" : "bg-stone-500"
+                }`} />
+              ) : (
+                <span className="block w-1 h-1 mt-1.5 opacity-0">•</span>
+              )}
+            </div>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

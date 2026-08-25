@@ -28,6 +28,13 @@ export interface WorldDefinition {
   image: string;
 }
 
+export interface UserProfileAnswers {
+  priorityCategory: WorldKey;
+  hobbies: string;
+  dreamLife: string;
+  completedAt?: string;
+}
+
 export interface UserAccount {
   id: string;
   username: string;
@@ -38,5 +45,6 @@ export interface UserAccount {
   streakBest: number;
   worldXp: Record<WorldKey, number>;
   tasks: QuestTask[];
+  profileAnswers?: UserProfileAnswers;
   updatedAt: string;
 }
