@@ -371,6 +371,7 @@ export default function App() {
     const willComplete = !task.completed;
     const diffMeta = DIFFICULTY_CONFIG[task.difficulty || "medium"];
     const xpReward = diffMeta.xp;
+    const completedAtStr = willComplete ? todayKey(now) : undefined;
 
     if (willComplete) {
       playCompletionChime();
@@ -391,7 +392,7 @@ export default function App() {
 
       const nextTasks = tasks.map((t) =>
         t.id === id
-          ? { ...t, completed: true, completedAt: todayKey(now) }
+          ? { ...t, completed: true, completedAt: completedAtStr }
           : t
       );
 
@@ -414,6 +415,21 @@ export default function App() {
         tasks: nextTasks,
       });
     }
+
+    // Backend Cloud SQL sync
+    if (authToken) {
+      fetch(`/api/tasks/${id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          completed: willComplete,
+          completedAt: completedAtStr || null,
+        }),
+      }).catch((e) => console.error("Cloud SQL task toggle sync error:", e));
+    }
   };
 
   // Add new quest
@@ -429,6 +445,26 @@ export default function App() {
       tasks: [newTask, ...currentAccount.tasks],
     });
     playTone(640, 100);
+
+    // Backend Cloud SQL sync
+    if (authToken) {
+      fetch("/api/tasks", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          id: newTask.id,
+          title: newTask.title,
+          category: newTask.category,
+          priority: newTask.priority,
+          difficulty: newTask.difficulty,
+          due: newTask.due,
+          notes: newTask.notes,
+        }),
+      }).catch((e) => console.error("Cloud SQL task create sync error:", e));
+    }
   };
 
   // Update existing quest from Calendar or Task Editor
@@ -441,6 +477,25 @@ export default function App() {
     });
     setEditingTask(null);
     playTone(580, 80);
+
+    // Backend Cloud SQL sync
+    if (authToken) {
+      fetch(`/api/tasks/${updated.id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          title: updated.title,
+          category: updated.category,
+          priority: updated.priority,
+          difficulty: updated.difficulty,
+          due: updated.due,
+          notes: updated.notes,
+        }),
+      }).catch((e) => console.error("Cloud SQL task update sync error:", e));
+    }
   };
 
   // Delete quest
@@ -452,6 +507,16 @@ export default function App() {
     });
     if (editingTask?.id === id) setEditingTask(null);
     playTone(240, 80);
+
+    // Backend Cloud SQL sync
+    if (authToken) {
+      fetch(`/api/tasks/${id}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      }).catch((e) => console.error("Cloud SQL task delete sync error:", e));
+    }
   };
 
   // Sign out handler
